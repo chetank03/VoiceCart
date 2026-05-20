@@ -37,6 +37,21 @@ def main() -> None:
         speaker.say("I could not find any groceries in that request.")
         return
 
+    # ── Price check ──────────────────────────────────────────────────────
+    if request.intent == "price_check":
+        if not settings.swiggy_token:
+            speaker.say("SWIGGY_MCP_TOKEN is not set. Add it to your .env file.")
+            return
+        try:
+            client = SwiggyMcpClient(token=settings.swiggy_token, dry_run=True)
+            price_lines = asyncio.run(client.get_item_prices(request.items))
+            for line in price_lines:
+                speaker.say(line)
+        except VoiceCartError as e:
+            speaker.say(str(e))
+        return
+
+    # ── Order flow ────────────────────────────────────────────────────────
     speaker.say(_localized_found_message(request.language, request.summary()))
 
     if settings.confirm_before_cart and not _confirm(_localized_confirm_prompt(request.language)):
@@ -44,10 +59,18 @@ def main() -> None:
         return
 
     if args.use_mcp:
-        client = SwiggyMcpClient(dry_run=args.dry_run)
-        results = asyncio.run(client.build_cart(request.items))
-        for result in results:
-            speaker.say(f"{result.item.name}: {result.status}. {result.detail}")
+        if not settings.swiggy_token:
+            speaker.say("SWIGGY_MCP_TOKEN is not set. Add it to your .env file.")
+            return
+        try:
+            client = SwiggyMcpClient(token=settings.swiggy_token, dry_run=args.dry_run)
+            results, bill = asyncio.run(client.build_cart(request.items))
+            for result in results:
+                speaker.say(result.detail)
+            for line in bill.speak_lines():
+                speaker.say(line)
+        except VoiceCartError as e:
+            speaker.say(str(e))
     else:
         speaker.say("MCP cart building is off. Run again with --use-mcp to build the cart.")
 

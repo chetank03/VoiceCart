@@ -10,22 +10,27 @@ from voicecart.models import GroceryItem, GroceryRequest
 
 
 _PROMPT = """\
-Extract all grocery items from the text below. The text may be in English, \
-Telugu script, or mixed Telugu-English (Tenglish / code-switched speech).
+Analyse the text below. The text may be in English, Telugu script, or mixed Telugu-English (Tenglish).
+
+First decide the intent:
+- "order"       — the user wants to add/buy/order items (e.g. "add milk", "paalu kavali")
+- "price_check" — the user is asking the price of one or more items (e.g. "how much is milk?", "paalu rate enti?", "what does rice cost?")
 
 Return ONLY valid JSON — no markdown fences, no explanation — in this exact shape:
 {{
+  "intent": "<order|price_check>",
   "language": "<en|te|mixed>",
   "items": [
-    {{"name": "<normalized English grocery name>", "quantity":  "<number as string>", "unit": "<kg|g|packet|packets|piece|pieces|litre|litres|dozen|  or empty string>"}}
+    {{"name": "<normalized English grocery name>", "quantity": "<number as string>", "unit": "<kg|g|packet|packets|piece|pieces|litre|litres|dozen| or empty string>"}}
   ]
 }}
 
 Rules:
 - Translate Telugu or Tenglish item names to common English grocery names (e.g. పాలు → milk, perugu → curd, biyyam → rice).
-- If no quantity is mentioned, use "1" and leave unit as an empty string.
+- For price_check intent, quantity and unit can be empty — just extract the item names.
+- If no quantity is mentioned for an order, use "1" and leave unit as an empty string.
 - Strip filler words like "add cheyyi", "kavali", "add", "please", "order", "get".
-- "language" should be "te" if the text is mostly Telugu script, "mixed" if it mixes scripts or uses Tenglish, "en" otherwise.
+- "language" should be "te" if mostly Telugu script, "mixed" if Tenglish, "en" otherwise.
 
 Text: {text}
 """
@@ -68,7 +73,12 @@ def parse_grocery_request(text: str, api_key: str) -> GroceryRequest:
         for entry in data.get("items", [])
         if entry.get("name")
     )
-    return GroceryRequest(raw_text=text, items=items, language=data.get("language", "en"))
+    return GroceryRequest(
+        raw_text=text,
+        items=items,
+        language=data.get("language", "en"),
+        intent=data.get("intent", "order"),
+    )
 
 
 def _strip_fences(text: str) -> str:
