@@ -10,10 +10,14 @@ from typing import Protocol
 import numpy as np
 import sounddevice as sd
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
+
+from voicecart.nlu import VoiceCartError
 
 
 SAMPLE_RATE = 16000
+_MIN_RECORDING_SECONDS = 0.5
 
 
 class Listener(Protocol):
@@ -39,16 +43,26 @@ class ConsoleSpeaker:
         _print_text(text)
 
 
-class PyttsxSpeaker:
+class GttsSpeaker:
     def __init__(self) -> None:
-        import pyttsx3
-
-        self._engine = pyttsx3.init()
+        import pygame
+        pygame.mixer.init()
 
     def say(self, text: str) -> None:
+        import io
+        import re
+        from gtts import gTTS
+        import pygame
+
         _print_text(text)
-        self._engine.say(text)
-        self._engine.runAndWait()
+        lang = "te" if re.search(r"[ఀ-౿]", text) else "en"
+        mp3 = io.BytesIO()
+        gTTS(text=text, lang=lang).write_to_fp(mp3)
+        mp3.seek(0)
+        pygame.mixer.music.load(mp3, "mp3")
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            pygame.time.wait(50)
 
 
 class GeminiVoiceListener:
@@ -82,8 +96,14 @@ class GeminiVoiceListener:
         ):
             stop_event.wait()
 
-        print("Processing...")
+        if not frames:
+            raise VoiceCartError("No audio recorded. Please try again.")
+
         audio = np.concatenate(frames, axis=0)
+        if len(audio) / SAMPLE_RATE < _MIN_RECORDING_SECONDS:
+            raise VoiceCartError("Recording was too short. Hold Enter longer while speaking.")
+
+        print("Processing...")
         wav_bytes = _to_wav(audio)
         return _transcribe(wav_bytes, self._api_key)
 
@@ -100,18 +120,29 @@ def _to_wav(audio: np.ndarray) -> bytes:
 
 def _transcribe(wav_bytes: bytes, api_key: str) -> str:
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=[
-            types.Part(inline_data=types.Blob(mime_type="audio/wav", data=wav_bytes)),
-            types.Part(text=(
-                "Transcribe this audio exactly as spoken. "
-                "The speaker may be in English, Telugu script, or mixed Telugu-English. "
-                "Return only the transcribed text, nothing else."
-            )),
-        ],
-    )
-    return response.text.strip()
+    try:
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=[
+                types.Part(inline_data=types.Blob(mime_type="audio/wav", data=wav_bytes)),
+                types.Part(text=(
+                    "Transcribe this audio exactly as spoken. "
+                    "The speaker may be in English, Telugu script, or mixed Telugu-English. "
+                    "Return only the transcribed text, nothing else."
+                )),
+            ],
+        )
+    except genai_errors.ClientError as e:
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            raise VoiceCartError("Gemini API quota exceeded. Please wait a moment and try again.") from e
+        raise VoiceCartError(f"Gemini API error: {e}") from e
+    except Exception as e:
+        raise VoiceCartError(f"Could not reach Gemini. Check your internet connection. ({e})") from e
+
+    text = response.text.strip() if response.text else ""
+    if not text:
+        raise VoiceCartError("Could not hear anything clearly. Please speak louder and try again.")
+    return text
 
 
 def build_listener(mode: str, api_key: str | None = None) -> Listener:
@@ -124,7 +155,7 @@ def build_listener(mode: str, api_key: str | None = None) -> Listener:
 
 def build_speaker(use_tts: bool) -> Speaker:
     if use_tts:
-        return PyttsxSpeaker()
+        return GttsSpeaker()
     return ConsoleSpeaker()
 
 

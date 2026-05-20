@@ -4,7 +4,7 @@ import argparse
 import asyncio
 
 from voicecart.config import load_settings
-from voicecart.nlu import parse_grocery_request
+from voicecart.nlu import VoiceCartError, parse_grocery_request
 from voicecart.swiggy_mcp import SwiggyMcpClient
 from voicecart.voice import build_listener, build_speaker
 
@@ -26,8 +26,12 @@ def main() -> None:
     speaker = build_speaker(args.tts)
 
     speaker.say("VoiceCart is ready. English and Telugu are supported.")
-    text = listener.listen()
-    request = parse_grocery_request(text, api_key=settings.gemini_api_key)
+    try:
+        text = listener.listen()
+        request = parse_grocery_request(text, api_key=settings.gemini_api_key)
+    except VoiceCartError as e:
+        speaker.say(str(e))
+        return
 
     if not request.items:
         speaker.say("I could not find any groceries in that request.")
