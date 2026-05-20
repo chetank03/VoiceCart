@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-import json
-import queue
+import io
 import sys
+import threading
+import wave
 from dataclasses import dataclass
 from typing import Protocol
+
+import numpy as np
+import sounddevice as sd
+from google import genai
+from google.genai import types
+
+
+SAMPLE_RATE = 16000
 
 
 class Listener(Protocol):
@@ -42,44 +51,74 @@ class PyttsxSpeaker:
         self._engine.runAndWait()
 
 
-class VoskListener:
-    def __init__(self, model_path: str, sample_rate: int = 16000) -> None:
-        import sounddevice as sd
-        from vosk import KaldiRecognizer, Model
+class GeminiVoiceListener:
+    """Records from microphone until Enter is pressed, then transcribes via Gemini."""
 
-        self._sd = sd
-        self._sample_rate = sample_rate
-        self._recognizer = KaldiRecognizer(Model(model_path), sample_rate)
-        self._audio_queue: queue.Queue[bytes] = queue.Queue()
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
 
     def listen(self) -> str:
-        def callback(indata, frames, time, status) -> None:  # noqa: ANN001
-            if status:
-                print(status, file=sys.stderr)
-            self._audio_queue.put(bytes(indata))
+        input("Press Enter to start recording...")
+        print("Recording — speak now. Press Enter again to stop.")
 
-        with self._sd.RawInputStream(
-            samplerate=self._sample_rate,
-            blocksize=8000,
-            dtype="int16",
+        frames: list[np.ndarray] = []
+        stop_event = threading.Event()
+
+        def _audio_callback(indata, frame_count, time_info, status) -> None:
+            frames.append(indata.copy())
+
+        def _wait_for_enter() -> None:
+            input()
+            stop_event.set()
+
+        stopper = threading.Thread(target=_wait_for_enter, daemon=True)
+        stopper.start()
+
+        with sd.InputStream(
+            samplerate=SAMPLE_RATE,
             channels=1,
-            callback=callback,
+            dtype="int16",
+            callback=_audio_callback,
         ):
-            print("Listening. Speak your grocery list.")
-            while True:
-                data = self._audio_queue.get()
-                if self._recognizer.AcceptWaveform(data):
-                    result = json.loads(self._recognizer.Result())
-                    text = result.get("text", "").strip()
-                    if text:
-                        return text
+            stop_event.wait()
+
+        print("Processing...")
+        audio = np.concatenate(frames, axis=0)
+        wav_bytes = _to_wav(audio)
+        return _transcribe(wav_bytes, self._api_key)
 
 
-def build_listener(mode: str, vosk_model: str | None) -> Listener:
+def _to_wav(audio: np.ndarray) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(audio.tobytes())
+    return buf.getvalue()
+
+
+def _transcribe(wav_bytes: bytes, api_key: str) -> str:
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-3.5-flash",
+        contents=[
+            types.Part(inline_data=types.Blob(mime_type="audio/wav", data=wav_bytes)),
+            types.Part(text=(
+                "Transcribe this audio exactly as spoken. "
+                "The speaker may be in English, Telugu script, or mixed Telugu-English. "
+                "Return only the transcribed text, nothing else."
+            )),
+        ],
+    )
+    return response.text.strip()
+
+
+def build_listener(mode: str, api_key: str | None = None) -> Listener:
     if mode == "voice":
-        if not vosk_model:
-            raise ValueError("Voice mode needs VOICECART_VOSK_MODEL or --vosk-model.")
-        return VoskListener(vosk_model)
+        if not api_key:
+            raise ValueError("Voice mode needs GEMINI_API_KEY.")
+        return GeminiVoiceListener(api_key)
     return TextListener()
 
 

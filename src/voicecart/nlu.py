@@ -33,7 +33,7 @@ Text: {text}
 def parse_grocery_request(text: str, api_key: str) -> GroceryRequest:
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-3.5-flash",
         contents=_PROMPT.format(text=text),
     )
     data = json.loads(_strip_fences(response.text))

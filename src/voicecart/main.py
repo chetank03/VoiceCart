@@ -16,14 +16,13 @@ def main() -> None:
     parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     parser.add_argument("--no-dry-run", dest="dry_run", action="store_false")
     parser.add_argument("--tts", action="store_true", help="Speak responses with local TTS")
-    parser.add_argument("--vosk-model", help="Path to Vosk model directory")
     args = parser.parse_args()
 
     settings = load_settings()
     if not settings.gemini_api_key:
         raise SystemExit("GEMINI_API_KEY is not set. Add it to your .env file.")
 
-    listener = build_listener(args.input, args.vosk_model or settings.vosk_model)
+    listener = build_listener(args.input, api_key=settings.gemini_api_key)
     speaker = build_speaker(args.tts)
 
     speaker.say("VoiceCart is ready. English and Telugu are supported.")
